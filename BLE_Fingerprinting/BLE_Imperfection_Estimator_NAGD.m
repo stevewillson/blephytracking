@@ -1,277 +1,284 @@
-function [amp,e,phi,I,Q,IQO,IQI,f0,phi_off,error,est_signal,fr,e_o] = BLE_Imperfection_Estimator_NAGD(x,seq,Fs,init_f0,init_e,init_phi,init_I,init_Q,init_amp,snr,n_partition)
-% This function uses Nesterov Accelerated Gradient Descent to estimate
-% hardware imperfection fingerprints of a Bluetooth signal
+function [amp, e, phi, I, Q, IQO, IQI, f0, phiOff, error, estSignal, fr, eO] = BLE_Imperfection_Estimator_NAGD(inputSignal, bits, samplingRate, initF0, initE, initPhi, initI, initQ, initAmp, signalToNoiseRatio, nPartitions)
+% Use a Nesterov Accelerated Gradient Descent to estimate hardware
+% imperfection fingerprints of a Bluetooth signal
 % Source: "Evaluating Physical-Layer BLE Location Tracking Attacks on Mobile Devices", IEEE SP 22
 
-snr = 10^(snr/20);
-err_thresh = max(0.4,1/(snr+1));
+% update snr to set the error threshold
+updatedSignalToNoiseRatio = 10^(signalToNoiseRatio/20);
+errorThreshold = max(0.4,1/(updatedSignalToNoiseRatio+1));
 
-x2 = x(1:end-2*Fs/1e6);
+% x is the input signal
+nSamplesPerBit = samplingRate / 1e6;
 
-t2 = (1:(length(x)))*(1/Fs);
+timePerSample = 1 / samplingRate;
+lInputSignal = length(inputSignal);
 
-seq = [1;0;seq];
-% Creating the clean signal
-est_signal_perfect2 = gfsk_modulate(seq,500e3,Fs).';
-if n_partition ~= 1
-    est_signal_perfect2 = (est_signal_perfect2(3.5*Fs/1e6+1:end-0.5*Fs/1e6));
+inputSignal2 = inputSignal(1:end-(2*nSamplesPerBit));
+t2 = (1:lInputSignal) * timePerSample;
+
+% add 2 bits (1 0) to the beginning of the bits vector
+bits = [1;0;bits];
+
+% Create the clean signal
+estPerfectSignal2 = gfsk_modulate(bits, 500e3, samplingRate).';
+if nPartitions ~= 1
+    estPerfectSignal2 = estPerfectSignal2((3.5 * nSamplesPerBit) + 1 : end - (0.5 * nSamplesPerBit));
 else
-    est_signal_perfect2 = (est_signal_perfect2(3.0*Fs/1e6+1:end-1*Fs/1e6));
+    estPerfectSignal2 = estPerfectSignal2((3.0 * nSamplesPerBit) + 1 : end - (1 * nSamplesPerBit));
 end
 
 fr = [];
-I2=0;
-Q2=0;
-IQO2=0;
-IQI2=0;
-e2=0;
-phi2=0;
-phi_off2=0;
+I2 = 0;
+Q2 = 0;
+IQO2 = 0;
+IQI2 = 0;
+e2 = 0;
+phi2 = 0;
+phiOff2 = 0;
 f02 = 0;
 amp2 = 0;
-e_o =[];
+eO = [];
 %freqsep2 = 0;
 error2 = 0;
 err = 0;
 
-% Partitioning the samples to speed up the code and running over multiple
+% Partition the samples to speed up the code and run over multiple
 % random partitions to improve estimation accuracy and robustness
-n = min(10,n_partition);
-l = floor(length(x2)/n_partition);
+n = min(10, nPartitions);
+l = floor(length(inputSignal2) / nPartitions);
 
-for inter= 1:n
-    r = randperm(length(est_signal_perfect2));
+for iPartition = 1:n
+    % generate a random permutation of integers from 1 to length of
+    % estPerfectSignal2 without repeating integers
+    r = randperm(length(estPerfectSignal2));
+
+    % only get the first l values (divided by the nPartitions)
     r = r(1:l);
-    est_signal_perfect = est_signal_perfect2(r);
+    % assign estPerfectSignal to the first r samples of estPerfectSignal2
+    estPerfectSignal = estPerfectSignal2(r);
     t = t2(r);
-    x = x2(r);
+    inputSignal = inputSignal2(r);
 
-    
-    % Initialization
-    e_new = init_e;
-    phi_new = init_phi/180*pi;
-    I_new = init_I;
-    Q_new = init_Q;
+    % initialization
+    eNew = initE;
+    phiNew = initPhi * pi / 180;
+    iNew = initI;
+    qNew = initQ;
 
-    if inter == 1
-        f0_new = init_f0;
+    if iPartition == 1
+        f0New = initF0;
     else
-        f0_new = f0;
-        init_f0 = f0;
+        f0New = f0;
+        initF0 = f0;
     end
-    w0_new = 2*pi*f0_new;
-    phi_off_new = 36/360*2*pi;
-    amp_new = init_amp;
+    w0New = 2*pi*f0New;
+    phiOffsetNew = 36/360*2*pi;
+    ampNew = initAmp;
 
     % Parameter update
-    e = e_new;
-    phi = phi_new;
-    I = I_new;
-    Q = Q_new;
-    w0 = w0_new;
-    phi_off = phi_off_new;
-    amp = amp_new;
+    e = eNew;
+    phi = phiNew;
+    I = iNew;
+    Q = qNew;
+    w0 = w0New;
+    phiOff = phiOffsetNew;
+    amp = ampNew;
     %freqsep = freqsep_new;
-    est_signal = ((amp-e)*(real(est_signal_perfect)*cos(phi)-imag(est_signal_perfect)*sin(phi))+...
-        1i*(amp+e)*(imag(est_signal_perfect)*cos(phi)+real(est_signal_perfect)*sin(phi))+...
-        I+1i*Q) .* exp(1i*(w0*t+phi_off));
+    estSignal = ((amp-e)*(real(estPerfectSignal)*cos(phi)-imag(estPerfectSignal)*sin(phi))+...
+        1i*(amp+e)*(imag(estPerfectSignal)*cos(phi)+real(estPerfectSignal)*sin(phi))+...
+        I+1i*Q) .* exp(1i*(w0*t+phiOff));
 
+    eT = 0;
+    phiT = 0;
+    IT = 0;
+    QT = 0;
+    w0T = 0;
+    phiOffT = 0;
+    ampT = 0;
 
-
-    e_t = 0;
-    phi_t = 0;
-    I_t = 0;
-    Q_t = 0;
-    w0_t = 0;
-    phi_off_t = 0;
-    amp_t = 0;
-
-    error_diff = 1;
+    errorDiff = 1;
 
     count = 0;
     round = 1;
     error = 1;
-    
-    while error_diff > 1e-7 && count<10e3%2e3
-        count = count+1;
-        
-        % Setting the learning rate and momentum
-        if error_diff > 1e-7
-            lr = 1e-3;
-            mom = 0.9;
-        elseif error_diff < 1e-7
-            lr = 1e-4;
-            mom = 0.9;
-        else
-            lr = 1e-3;
-            mom = 0.9;
-        end
 
+    while errorDiff > 1e-7 && count < 10e3 %2e3
+        count = count + 1;
+
+        % Set the learning rate and momentum
+        if errorDiff > 1e-7
+            learningRate = 1e-3;
+            momentum = 0.9;
+
+        elseif errorDiff < 1e-7
+            learningRate = 1e-4;
+            momentum = 0.9;
+
+        else
+            learningRate = 1e-3;
+            momentum = 0.9;
+
+        end
 
         % Momentum step
         %e = e_new - mom*e_t;
-        phi = phi_new - mom*phi_t;
-        I = I_new - mom*I_t;
-        Q = Q_new - mom*Q_t;
-        w0 = w0_new - mom*w0_t;
-        phi_off = phi_off_new - mom*phi_off_t;
+        phi = phiNew - (momentum * phiT);
+        I = iNew - (momentum * IT);
+        Q = qNew - (momentum * QT);
+        w0 = w0New - (momentum * w0T);
+        phiOff = phiOffsetNew - (momentum * phiOffT);
         %amp = amp_new - mom*amp_t;
         %freqsep = freqsep_new - mom*freqsep_t;
 
         % Re-initialization
-        if count > round*2e2 && error(end) > err_thresh
-            if floor(round/2)*2 == round-1
-                round = round+1;
-                f0 = init_f0-floor(round/2)*1.5e3;
-                w0_new = 2*pi*f0;
+        if count > round*2e2 && error(end) > errorThreshold
+            if floor(round/2) * 2 == round - 1
+                round = round + 1;
+                f0 = initF0 - (floor(round/2) * 1.5e3);
+                w0New = 2 * pi * f0;
             else
-                round = round+1;
-                f0 = init_f0+(round/2)*1.5e3;
-                w0_new = 2*pi*f0;
+                round = round + 1;
+                f0 = initF0 + (round/2) * 1.5e3;
+                w0New = 2 * pi * f0;
 
             end
         end
 
-        % Computing updated created imperfect signal
-        Imag_part = ((amp-e)*(real(est_signal_perfect)*cos(phi)-imag(est_signal_perfect)*sin(phi))+I).*sin(w0*t+phi_off) +...
-            ((amp+e)*(imag(est_signal_perfect)*cos(phi)+...
-            real(est_signal_perfect)*sin(phi))+Q).*cos(w0*t+phi_off);
+        % Compute updated created imperfect signal
+        ImagPart = ((amp-e)*(real(estPerfectSignal)*cos(phi)-imag(estPerfectSignal)*sin(phi))+I).*sin(w0*t+phiOff) +...
+            ((amp+e)*(imag(estPerfectSignal)*cos(phi)+...
+            real(estPerfectSignal)*sin(phi))+Q).*cos(w0*t+phiOff);
 
-        Real_part = ((amp-e)*(real(est_signal_perfect)*cos(phi)-imag(est_signal_perfect)*sin(phi))+I).*cos(w0*t+phi_off) -...
-            ((amp+e)*(imag(est_signal_perfect)*cos(phi)+...
-            real(est_signal_perfect)*sin(phi))+Q).*sin(w0*t+phi_off);
+        RealPart = ((amp-e)*(real(estPerfectSignal)*cos(phi)-imag(estPerfectSignal)*sin(phi))+I).*cos(w0*t+phiOff) -...
+            ((amp+e)*(imag(estPerfectSignal)*cos(phi)+...
+            real(estPerfectSignal)*sin(phi))+Q).*sin(w0*t+phiOff);
 
         % Gradient descent calculation and update
-        
-        
+
         % freqsep_d = ((amp-e)*(*cos(phi)+imag(est_signal_perfect)*sin(phi))+I).*sin(w0*t+phi_off) +...
         %         ((amp+e)*(imag(est_signal_perfect)*cos(phi)+...
         %         real(est_signal_perfect)*sin(phi))+Q).*cos(w0*t+phi_off);
 
-        e_d =  - mean((imag(x.')-Imag_part).*((-(real(est_signal_perfect)*cos(phi)-imag(est_signal_perfect)*sin(phi))).*sin(w0*t+phi_off)+...
-            (imag(est_signal_perfect)*cos(phi) +...
-            real(est_signal_perfect)*sin(phi)).*cos(w0*t+phi_off)));
+        eD =  -mean((imag(inputSignal.')-ImagPart).*((-(real(estPerfectSignal)*cos(phi)-imag(estPerfectSignal)*sin(phi))).*sin(w0*t+phiOff)+...
+            (imag(estPerfectSignal)*cos(phi) +...
+            real(estPerfectSignal)*sin(phi)).*cos(w0*t+phiOff)));
 
-        phi_d = -mean((imag(x.')-Imag_part).*((amp-e)*(-real(est_signal_perfect)*sin(phi)+imag(est_signal_perfect)*cos(phi)).*sin(w0*t+phi_off)+...
-            ((amp+e)*(real(est_signal_perfect)*cos(phi) -...
-            imag(est_signal_perfect)*sin(phi))).*cos(w0*t+phi_off)));
+        phiD = -mean((imag(inputSignal.')-ImagPart).*((amp-e)*(-real(estPerfectSignal)*sin(phi)+imag(estPerfectSignal)*cos(phi)).*sin(w0*t+phiOff)+...
+            ((amp+e)*(real(estPerfectSignal)*cos(phi) -...
+            imag(estPerfectSignal)*sin(phi))).*cos(w0*t+phiOff)));
 
-        I_d = -mean((imag(x.')-Imag_part).*(sin(w0*t+phi_off)));
+        ID = -mean((imag(inputSignal.')-ImagPart).*(sin(w0*t+phiOff)));
 
-        Q_d = -mean((imag(x.')-Imag_part).*(cos(w0*t+phi_off)));
-
-
-        w0_d = -mean((imag(x.')-Imag_part).*(t.*((amp-e)*(real(est_signal_perfect)*cos(phi)-imag(est_signal_perfect)*sin(phi))+I).*cos(w0*t+phi_off) - ...
-            t.*((amp+e)*(imag(est_signal_perfect)*cos(phi)+...
-            real(est_signal_perfect)*sin(phi))+Q).*sin(w0*t+phi_off)));
-
-        phi_off_d = -mean((imag(x.')-Imag_part).*(((amp-e)*(real(est_signal_perfect)*cos(phi)-imag(est_signal_perfect)*sin(phi))+I).*cos(w0*t+phi_off) - ...
-            ((amp+e)*(imag(est_signal_perfect)*cos(phi)+...
-            real(est_signal_perfect)*sin(phi))+Q).*sin(w0*t+phi_off)));
-
-        amp_d = - mean((imag(x.')-Imag_part).* (((1)*(real(est_signal_perfect)*cos(phi)-imag(est_signal_perfect)*sin(phi))+I).*sin(w0*t+phi_off) +...
-            ((1)*(imag(est_signal_perfect)*cos(phi)+...
-            real(est_signal_perfect)*sin(phi))+Q).*cos(w0*t+phi_off)));
+        QD = -mean((imag(inputSignal.')-ImagPart).*(cos(w0*t+phiOff)));
 
 
-        e_d = e_d - mean((real(x.')-Real_part).*((-(real(est_signal_perfect)*cos(phi)-imag(est_signal_perfect)*sin(phi))).*cos(w0*t+phi_off)-...
-            (imag(est_signal_perfect)*cos(phi) +...
-            real(est_signal_perfect)*sin(phi)).*sin(w0*t+phi_off)));
+        w0D = -mean((imag(inputSignal.')-ImagPart).*(t.*((amp-e)*(real(estPerfectSignal)*cos(phi)-imag(estPerfectSignal)*sin(phi))+I).*cos(w0*t+phiOff) - ...
+            t.*((amp+e)*(imag(estPerfectSignal)*cos(phi)+...
+            real(estPerfectSignal)*sin(phi))+Q).*sin(w0*t+phiOff)));
 
-        phi_d = phi_d - mean((real(x.')-Real_part).*((amp-e)*(-real(est_signal_perfect)*sin(phi)+imag(est_signal_perfect)*cos(phi)).*cos(w0*t+phi_off)-...
-            ((amp+e)*(real(est_signal_perfect)*cos(phi) -...
-            imag(est_signal_perfect)*sin(phi))).*sin(w0*t+phi_off)));
+        phiOffD = -mean((imag(inputSignal.')-ImagPart).*(((amp-e)*(real(estPerfectSignal)*cos(phi)-imag(estPerfectSignal)*sin(phi))+I).*cos(w0*t+phiOff) - ...
+            ((amp+e)*(imag(estPerfectSignal)*cos(phi)+...
+            real(estPerfectSignal)*sin(phi))+Q).*sin(w0*t+phiOff)));
 
-        I_d = I_d - mean((real(x.')-Real_part).*(cos(w0*t+phi_off)));
+        ampD = -mean((imag(inputSignal.')-ImagPart).* (((1)*(real(estPerfectSignal)*cos(phi)-imag(estPerfectSignal)*sin(phi))+I).*sin(w0*t+phiOff) +...
+            ((1)*(imag(estPerfectSignal)*cos(phi)+...
+            real(estPerfectSignal)*sin(phi))+Q).*cos(w0*t+phiOff)));
 
-        Q_d = Q_d + mean((real(x.')-Real_part).*(sin(w0*t+phi_off)));
+
+        eD = eD - mean((real(inputSignal.')-RealPart).*((-(real(estPerfectSignal)*cos(phi)-imag(estPerfectSignal)*sin(phi))).*cos(w0*t+phiOff)-...
+            (imag(estPerfectSignal)*cos(phi) +...
+            real(estPerfectSignal)*sin(phi)).*sin(w0*t+phiOff)));
+
+        phiD = phiD - mean((real(inputSignal.')-RealPart).*((amp-e)*(-real(estPerfectSignal)*sin(phi)+imag(estPerfectSignal)*cos(phi)).*cos(w0*t+phiOff)-...
+            ((amp+e)*(real(estPerfectSignal)*cos(phi) -...
+            imag(estPerfectSignal)*sin(phi))).*sin(w0*t+phiOff)));
+
+        ID = ID - mean((real(inputSignal.')-RealPart).*(cos(w0*t+phiOff)));
+
+        QD = QD + mean((real(inputSignal.')-RealPart).*(sin(w0*t+phiOff)));
 
 
-        w0_d = w0_d - mean((real(x.')-Real_part).*(-t.*((amp-e)*(real(est_signal_perfect)*cos(phi)-imag(est_signal_perfect)*sin(phi))+I).*sin(w0*t+phi_off) - ...
-            t.*((amp+e)*(imag(est_signal_perfect)*cos(phi)+...
-            real(est_signal_perfect)*sin(phi))+Q).*cos(w0*t+phi_off)));
+        w0D = w0D - mean((real(inputSignal.')-RealPart).*(-t.*((amp-e)*(real(estPerfectSignal)*cos(phi)-imag(estPerfectSignal)*sin(phi))+I).*sin(w0*t+phiOff) - ...
+            t.*((amp+e)*(imag(estPerfectSignal)*cos(phi)+...
+            real(estPerfectSignal)*sin(phi))+Q).*cos(w0*t+phiOff)));
 
-        phi_off_d = phi_off_d - mean((real(x.')-Real_part).*(-((amp-e)*(real(est_signal_perfect)*cos(phi)-imag(est_signal_perfect)*sin(phi))+I).*sin(w0*t+phi_off) - ...
-            ((amp+e)*(imag(est_signal_perfect)*cos(phi)+...
-            real(est_signal_perfect)*sin(phi))+Q).*cos(w0*t+phi_off)));
+        phiOffD = phiOffD - mean((real(inputSignal.')-RealPart).*(-((amp-e)*(real(estPerfectSignal)*cos(phi)-imag(estPerfectSignal)*sin(phi))+I).*sin(w0*t+phiOff) - ...
+            ((amp+e)*(imag(estPerfectSignal)*cos(phi)+...
+            real(estPerfectSignal)*sin(phi))+Q).*cos(w0*t+phiOff)));
 
-        amp_d = amp_d - mean((real(x.')-Real_part).* (((1)*(real(est_signal_perfect)*cos(phi)-imag(est_signal_perfect)*sin(phi))+I).*cos(w0*t+phi_off) -...
-            ((1)*(imag(est_signal_perfect)*cos(phi)+...
-            real(est_signal_perfect)*sin(phi))+Q).*sin(w0*t+phi_off)));
-        
-        if error_diff >1e-7
-            e_t = mom*e_t + lr*e_d;
-            phi_t = mom*phi_t + lr*phi_d;
-            I_t = mom*I_t + lr/1*I_d;
-            Q_t = mom*Q_t + lr/1*Q_d;
-            w0_t = mom*w0_t + 1e8*lr*w0_d;
-            phi_off_t = mom*phi_off_t + 10*lr*phi_off_d;
-            amp_t = mom*amp_t + lr*amp_d;
-            %freqsep_t = mom*freqsep_t + lr*freqsep_d;
+        ampD = ampD - mean((real(inputSignal.')-RealPart).* (((1)*(real(estPerfectSignal)*cos(phi)-imag(estPerfectSignal)*sin(phi))+I).*cos(w0*t+phiOff) -...
+            ((1)*(imag(estPerfectSignal)*cos(phi)+...
+            real(estPerfectSignal)*sin(phi))+Q).*sin(w0*t+phiOff)));
+
+        if errorDiff >1e-7
+            eT = (momentum * eT) + (learningRate * eD);
+            phiT = (momentum * phiT) + (learningRate * phiD);
+            IT = (momentum * IT) + (learningRate/1 * ID);
+            QT = (momentum * QT) + (learningRate/1 * QD);
+            w0T = (momentum * w0T) + (1e8 * learningRate * w0D);
+            phiOffT = (momentum * phiOffT) + (10 * learningRate * phiOffD);
+            ampT = (momentum * ampT) + (learningRate * ampD);
+            %freqsep_t = (momentum * freqsep_t) + (learningRate * freqsep_d);
         else
-            e_t = mom*e_t + lr*e_d;
-            phi_t = mom*phi_t + lr*phi_d;
-            I_t = mom*I_t + lr/1*I_d;
-            Q_t = mom*Q_t + lr/1*Q_d;
+            eT = (momentum * eT) + (learningRate * eD);
+            phiT = (momentum * phiT) + (learningRate * phiD);
+            IT = (momentum * IT) + (learningRate/1 * ID);
+            QT = (momentum * QT) + (learningRate/1 * QD);
             %w0_t = mom*w0_t + 1e8*lr*w0_d;
-            phi_off_t = mom*phi_off_t + 10*lr*phi_off_d;
-            amp_t = mom*amp_t + lr*amp_d;
+            phiOffT = (momentum * phiOffT) + (10 * learningRate * phiOffD);
+            ampT = (momentum * ampT) + (learningRate * ampD);
         end
 
         %amp_new = amp + lr * mean((imag(x.')-Imag_part).* Imag_part / amp);
 
-
-
-        e_new = e_new-e_t;
-        phi_new = phi_new-phi_t;
-        I_new = I_new-I_t;
-        Q_new = Q_new-Q_t;
-        w0_new = w0_new-w0_t;
-        phi_off_new = phi_off_new-phi_off_t;
-        amp_new = amp_new-amp_t;
+        eNew = eNew - eT;
+        phiNew = phiNew - phiT;
+        iNew = iNew - IT;
+        qNew = qNew - QT;
+        w0New = w0New - w0T;
+        phiOffsetNew = phiOffsetNew - phiOffT;
+        ampNew = ampNew - ampT;
         %freqsep_new = freqsep_new-freqsep_t;
-        
-        % updating parameters
-        e = e_new;
-        phi = phi_new;
-        I = I_new;
-        Q = Q_new;
-        w0 = w0_new;
-        phi_off = phi_off_new;
-        amp = amp_new;
+
+        % update parameters
+        e = eNew;
+        phi = phiNew;
+        I = iNew;
+        Q = qNew;
+        w0 = w0New;
+        phiOff = phiOffsetNew;
+        amp = ampNew;
         %freqsep = freqsep_new;
 
-        est_signal = ((amp-e)*(real(est_signal_perfect)*cos(phi)-imag(est_signal_perfect)*sin(phi))+...
-        1i*(amp+e)*(imag(est_signal_perfect)*cos(phi)+real(est_signal_perfect)*sin(phi))+...
-        I+1i*Q) .* exp(1i*(w0*t+phi_off));
-        
-        % computing the error
-        %error = [error,mean(abs(est_signal.' - x)./abs(x))/2];
-        error = [error,mean(norm(est_signal.'-x).^2)/mean(norm(x).^2)/2];
+        estSignal = ((amp-e)*(real(estPerfectSignal)*cos(phi)-imag(estPerfectSignal)*sin(phi))+...
+            1i*(amp+e)*(imag(estPerfectSignal)*cos(phi)+real(estPerfectSignal)*sin(phi))+...
+            I+1i*Q) .* exp(1i*(w0*t+phiOff));
 
-        if length(error) > 1 && error(end) < err_thresh
-            error_diff = abs(error(end)-error(end-1));
+        % compute the error
+        %error = [error,mean(abs(est_signal.' - x)./abs(x))/2];
+        error = [error,mean(norm(estSignal.'-inputSignal).^2)/mean(norm(inputSignal).^2)/2];
+
+        if length(error) > 1 && error(end) < errorThreshold
+            errorDiff = abs(error(end)-error(end-1));
         end
     end
     err = max([err,error(end)]);
 
-    signal = x.*exp(-1j*(w0*t'+phi_off));
+    signal = inputSignal.*exp(-1j*(w0*t'+phiOff));
 
     try
         ell = fit_ellipse(real(signal),3*imag(signal));
-
         IQO = sqrt((ell.X0/ell.a)^2+(ell.Y0/ell.b)^2);
         IQI = ell.a/ell.b*3;
         flag = 1;
     catch
-
         warning('Ill ellipse');
         flag = 0;
     end
 
     if flag == 1
         f0 = w0/(2*pi);
-        phi_off = phi_off*(360/(2*pi));
+        phiOff = phiOff*(360/(2*pi));
         phi = phi *(360/(2*pi));
         fr = [fr;f0];
         I2 = I2+I;
@@ -280,7 +287,7 @@ for inter= 1:n
         IQI2 = IQI2+IQI;
         %e2 = e2+e;
         e2 = e2+e;
-        phi_off2 = phi_off2+phi_off;
+        phiOff2 = phiOff2+phiOff;
         phi2 = phi2+phi;
         f02 = f02+f0;
         amp2 = amp2+amp;
@@ -295,9 +302,9 @@ Q = Q2/n;
 Q = Q/amp;
 IQO = IQO2/n;
 IQI = IQI2/n;
-phi=phi2/n;
-e=e2/n;
-phi_off=phi_off2/n;
+phi = phi2/n;
+e = e2/n;
+phiOff = phiOff2/n;
 f0 = f02/n;
 amp = amp2/n;
 error = err;
